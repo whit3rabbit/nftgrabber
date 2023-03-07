@@ -1,7 +1,6 @@
 const puppeteer = require("puppeteer");
 const fs = require("fs");
 const path = require("path");
-
 const url = process.argv[2];
 
 if (!url) {
@@ -12,28 +11,8 @@ if (!url) {
 (async () => {
   console.log("Loading...");
   try {
-    const browser = await puppeteer.launch({
-      headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
-    });
+    const browser = await puppeteer.launch({ headless: true });
     const page = await browser.newPage();
-
-    await page.setRequestInterception(true);
-
-    page.on("request", (request) => {
-      const resourceType = request.resourceType();
-      if (
-        resourceType === "document" ||
-        resourceType === "xhr" ||
-        resourceType === "fetch" ||
-        resourceType === "script" ||
-        resourceType === "image"
-      ) {
-        request.continue();
-      } else {
-        request.abort();
-      }
-    });
 
     await page.goto(url);
     await page.setViewport({
@@ -44,13 +23,7 @@ if (!url) {
     await page.waitForSelector(".ReactVirtualized__Grid");
 
     const pageTitle = await page.title();
-    const collection = pageTitle
-      .split("-")
-      .shift()
-      .trim()
-      .split(" ")
-      .slice(0, 3)
-      .join("-")
+    const collection = pageTitle.split("-").shift().trim().split(" ").slice(0, 3).join("-")
       .replace(/[^a-zA-Z0-9-]/g, "");
     if (!fs.existsSync(collection)) {
       fs.mkdirSync(collection);
@@ -58,23 +31,23 @@ if (!url) {
 
     let currentImage = 1;
 
-    const imageUrls = await page.evaluate(() => {
-      const imageElements = [...document.querySelectorAll(".ImageCard--image img")];
-      return imageElements.map((element) => element.src.replace(/\/thumb\//, "/"));
+    page.on("response", async (response) => {
+      const imageUrl = response.url();
+      if (response.request().resourceType() === "image") {
+        if (imageUrl.includes("t_image_preview")) {
+          try {
+            const fileName = imageUrl.split("/").pop() + ".avif";
+            const filePath = path.resolve(__dirname, collection, fileName);
+            const file = await response.buffer();
+            fs.writeFileSync(filePath, file);
+            console.log(`${collection} #${currentImage} saved to ${collection}/${fileName}`);
+            currentImage++;
+          } catch (error) {
+            console.error(`Error saving ${imageUrl}`, error);
+          }
+        }
+      }
     });
-
-    await Promise.all(
-      imageUrls
-        .filter((url) => url.includes("t_image_preview"))
-        .map(async (url) => {
-          const fileName = url.split("/").pop() + ".avif";
-          const filePath = path.resolve(__dirname, collection, fileName);
-          const response = await page.goto(url);
-          response.body().pipe(fs.createWriteStream(filePath));
-          console.log(`${collection} #${currentImage} saved to ${collection}/${fileName}`);
-          currentImage++;
-        })
-    );
 
     await autoScroll(page);
 
