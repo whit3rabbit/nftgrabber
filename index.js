@@ -2,6 +2,7 @@ const puppeteer = require("puppeteer");
 const fs = require("fs");
 const path = require("path");
 const url = process.argv[2];
+const saveStatePath = "./save-state.json";
 
 if (!url) {
   console.log(`Please enter a URL (e.g. "npm start https://rarible.com/boredapeyachtclub").`);
@@ -30,6 +31,16 @@ if (!url) {
     }
 
     let currentImage = 1;
+    let lastSavedPosition = null;
+
+    if (fs.existsSync(saveStatePath)) {
+      const saveState = JSON.parse(fs.readFileSync(saveStatePath));
+      if (saveState.collection === collection) {
+        console.log(`Found previous state for ${collection}. Resuming...`);
+        currentImage = saveState.currentImage;
+        lastSavedPosition = saveState.lastSavedPosition;
+      }
+    }
 
     page.on("response", async (response) => {
       const imageUrl = response.url();
@@ -42,6 +53,16 @@ if (!url) {
             fs.writeFileSync(filePath, file);
             console.log(`${collection} #${currentImage} saved to ${collection}/${fileName}`);
             currentImage++;
+
+            if (currentImage % 20 === 0) {
+              const saveState = {
+                collection,
+                currentImage,
+                lastSavedPosition,
+              };
+              fs.writeFileSync(saveStatePath, JSON.stringify(saveState));
+              console.log(`Saved state for ${collection}.`);
+            }
           } catch (error) {
             console.error(`Error saving ${imageUrl}`, error);
           }
@@ -49,7 +70,10 @@ if (!url) {
       }
     });
 
-    await autoScroll(page);
+    if (lastSavedPosition) {
+      console.log("Scrolling to last saved position");
+      await autoScroll(page, lastSavedPosition);
+    }
 
     await page.evaluate(() => {
       const elements = [...document.querySelectorAll("button")];
@@ -57,15 +81,24 @@ if (!url) {
       targetElement && targetElement.click();
     });
 
-    await autoScroll(page);
+    lastSavedPosition = await autoScroll(page, lastSavedPosition);
+
+    const saveState = {
+      collection,
+      currentImage,
+      lastSavedPosition,
+    };
+    fs.writeFileSync(saveStatePath, JSON.stringify(saveState));
+    console.log(`Saved final state for ${collection}.`);
+
     await browser.close();
   } catch (error) {
     console.error("Error:", error);
   }
 })();
 
-async function autoScroll(page) {
-  await page.evaluate(async () => {
+async function autoScroll(page, lastSavedPosition) {
+  await page.evaluate(async (lastSavedPosition) => {
     await new Promise((resolve) => {
       let totalHeight = 0;
       let distance = 500;
@@ -77,8 +110,11 @@ async function autoScroll(page) {
         if (totalHeight >= scrollHeight) {
           clearInterval(timer);
           resolve();
+        } else if (totalHeight >= lastSavedPosition) {
+          clearInterval(timer);
+          resolve();
         }
       }, 1000);
     });
-  });
+  }, lastSavedPosition);
 }
