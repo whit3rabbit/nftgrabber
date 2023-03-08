@@ -1,5 +1,5 @@
 const puppeteer = require("puppeteer");
-const fs = require("fs");
+const fs = require("fs/promises");
 const path = require("path");
 const url = process.argv[2];
 const saveStatePath = "./save-state.json";
@@ -26,21 +26,25 @@ if (!url) {
     const pageTitle = await page.title();
     const collection = pageTitle.split("-").shift().trim().split(" ").slice(0, 3).join("-")
       .replace(/[^a-zA-Z0-9-]/g, "");
-    if (!fs.existsSync(collection)) {
-      fs.mkdirSync(collection);
-    }
+    const collectionDir = path.join(__dirname, collection);
+    await fs.mkdir(collectionDir, { recursive: true });
 
     let currentImage = 1;
     let lastSavedPosition = null;
 
-    if (fs.existsSync(saveStatePath)) {
-      const saveState = JSON.parse(fs.readFileSync(saveStatePath));
-      if (saveState.collection === collection) {
-        console.log(`Found previous state for ${collection}. Resuming...`);
-        currentImage = saveState.currentImage;
-        lastSavedPosition = saveState.lastSavedPosition;
-      }
-    }
+	try {
+	  await fs.access(saveStatePath);
+	  const saveState = JSON.parse(await fs.readFile(saveStatePath));
+	  if (saveState.collection === collection) {
+		console.log(`Found previous state for ${collection}. Resuming...`);
+		currentImage = saveState.currentImage;
+		lastSavedPosition = saveState.lastSavedPosition;
+	  }
+	} catch (error) {
+	  if (error.code !== "ENOENT") {
+		console.error(`Error accessing ${saveStatePath}`, error);
+	  }
+	}
 
     page.on("response", async (response) => {
       const imageUrl = response.url();
@@ -48,9 +52,9 @@ if (!url) {
         if (imageUrl.includes("t_image_preview")) {
           try {
             const fileName = imageUrl.split("/").pop() + ".avif";
-            const filePath = path.resolve(__dirname, collection, fileName);
+            const filePath = path.join(collectionDir, fileName);
             const file = await response.buffer();
-            fs.writeFileSync(filePath, file);
+            await fs.writeFile(filePath, file);
             console.log(`${collection} #${currentImage} saved to ${collection}/${fileName}`);
             currentImage++;
 
@@ -60,8 +64,8 @@ if (!url) {
                 currentImage,
                 lastSavedPosition,
               };
-              fs.writeFileSync(saveStatePath, JSON.stringify(saveState));
-              console.log(`Saved state for ${collection}.`);
+              await fs.writeFile(saveStatePath, JSON.stringify(saveState));
+              console.log(`Saved state for ${collection}`);
             }
           } catch (error) {
             console.error(`Error saving ${imageUrl}`, error);
@@ -88,7 +92,7 @@ if (!url) {
       currentImage,
       lastSavedPosition,
     };
-    fs.writeFileSync(saveStatePath, JSON.stringify(saveState));
+    await fs.writeFile(saveStatePath, JSON.stringify(saveState));
     console.log(`Saved final state for ${collection}.`);
 
     await browser.close();
